@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { db, USER_ID } from "./db.js";
+import { DEFAULT_USER_ID, db, currentUserId } from "./db.js";
 
 export const DEFAULT_SESSION_ID = "local-default";
 export const MEMORY_TYPES = new Set([
@@ -32,6 +32,24 @@ const WEEKDAY_NUMBERS = {
 };
 
 const now = () => new Date().toISOString();
+
+export function currentDefaultSessionId() {
+  const userId = currentUserId();
+  return userId === DEFAULT_USER_ID
+    ? DEFAULT_SESSION_ID
+    : `${DEFAULT_SESSION_ID}:${userId}`;
+}
+
+export function ensureUserSession() {
+  const sessionId = currentDefaultSessionId();
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO sessions (
+        id, user_id, title, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(sessionId, currentUserId(), "训练对话", now(), now());
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -225,11 +243,7 @@ if (!jobColumns.some((column) => column.name === "payload_json")) {
   db.exec("ALTER TABLE jobs ADD COLUMN payload_json TEXT");
 }
 
-db.prepare(
-  `INSERT OR IGNORE INTO sessions (
-    id, user_id, title, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?)`
-).run(DEFAULT_SESSION_ID, USER_ID, "训练对话", now(), now());
+ensureUserSession();
 db.prepare(
   "UPDATE messages SET session_id = ? WHERE session_id IS NULL"
 ).run(DEFAULT_SESSION_ID);
@@ -278,7 +292,7 @@ export function listSessions() {
        GROUP BY s.id
        ORDER BY s.updated_at DESC`
     )
-    .all(USER_ID);
+    .all(currentUserId());
 }
 
 export function getSession(sessionId) {
@@ -290,7 +304,7 @@ export function getSession(sessionId) {
        FROM sessions
        WHERE id = ? AND user_id = ?`
     )
-    .get(sessionId, USER_ID);
+    .get(sessionId, currentUserId());
 }
 
 export function createSession(title = "新训练对话") {
@@ -300,7 +314,7 @@ export function createSession(title = "新训练对话") {
     `INSERT INTO sessions (
       id, user_id, title, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?)`
-  ).run(id, USER_ID, String(title).trim() || "新训练对话", timestamp, timestamp);
+  ).run(id, currentUserId(), String(title).trim() || "新训练对话", timestamp, timestamp);
   return getSession(id);
 }
 
@@ -320,7 +334,7 @@ export function updateSession(sessionId, { title, summary, summaryUntil } = {}) 
     summaryUntil === undefined ? null : summaryUntil,
     now(),
     sessionId,
-    USER_ID
+    currentUserId()
   );
   return getSession(sessionId);
 }
@@ -335,11 +349,11 @@ export function deleteSession(sessionId) {
   try {
     db.prepare("DELETE FROM messages WHERE session_id = ? AND user_id = ?").run(
       sessionId,
-      USER_ID
+      currentUserId()
     );
     db.prepare("DELETE FROM sessions WHERE id = ? AND user_id = ?").run(
       sessionId,
-      USER_ID
+      currentUserId()
     );
     db.exec("COMMIT");
     return true;
@@ -364,7 +378,7 @@ export function listSessionMessages(sessionId, limit = 100) {
        )
        ORDER BY created_at ASC`
     )
-    .all(USER_ID, sessionId, limit)
+    .all(currentUserId(), sessionId, limit)
     .map(mapMessage);
 }
 
@@ -372,7 +386,7 @@ export function clearSessionMessages(sessionId) {
   if (!getSession(sessionId)) return 0;
   return db
     .prepare("DELETE FROM messages WHERE user_id = ? AND session_id = ?")
-    .run(USER_ID, sessionId).changes;
+    .run(currentUserId(), sessionId).changes;
 }
 
 export function listSessionMessagesBefore(sessionId, before, limit = 40) {
@@ -391,7 +405,7 @@ export function listSessionMessagesBefore(sessionId, before, limit = 40) {
        )
        ORDER BY created_at ASC`
     )
-    .all(USER_ID, sessionId, before || null, before || null, limit)
+    .all(currentUserId(), sessionId, before || null, before || null, limit)
     .map(mapMessage);
 }
 
@@ -412,7 +426,7 @@ export function saveSessionMessage({
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
-    USER_ID,
+    currentUserId(),
     role,
     content,
     modelLabel,
@@ -424,7 +438,7 @@ export function saveSessionMessage({
   db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ? AND user_id = ?").run(
     timestamp,
     sessionId,
-    USER_ID
+    currentUserId()
   );
   return { id, createdAt: timestamp };
 }
@@ -438,7 +452,7 @@ export function sessionMemoryStats(sessionId) {
        FROM messages
        WHERE user_id = ? AND session_id = ?`
     )
-    .get(USER_ID, sessionId);
+    .get(currentUserId(), sessionId);
   const session = getSession(sessionId);
   return {
     sessionId,
@@ -452,7 +466,7 @@ export function sessionMemoryStats(sessionId) {
 export function getRunnerProfile() {
   const profile = db
     .prepare("SELECT * FROM runner_profile WHERE user_id = ?")
-    .get(USER_ID);
+    .get(currentUserId());
   if (!profile) {
     return {
       displayName: "",
@@ -510,7 +524,7 @@ export function saveRunnerProfile(input = {}) {
       notes = excluded.notes,
       updated_at = excluded.updated_at`
   ).run(
-    USER_ID,
+    currentUserId(),
     String(input.displayName || "").trim(),
     String(input.goalRace || "").trim(),
     String(input.goalDate || "").trim(),
@@ -641,7 +655,7 @@ function supersedeConflictingMemories(id, type, content) {
        FROM memory_items
        WHERE user_id = ? AND id <> ? AND superseded_at IS NULL`
     )
-    .all(USER_ID, id);
+    .all(currentUserId(), id);
   const timestamp = now();
   const markSuperseded = db.prepare(
     `UPDATE memory_items
@@ -664,7 +678,7 @@ function supersedeConflictingMemories(id, type, content) {
       )
     );
     if (![...keys].some((key) => candidateKeys.has(key))) continue;
-    markSuperseded.run(timestamp, id, timestamp, candidate.id, USER_ID);
+    markSuperseded.run(timestamp, id, timestamp, candidate.id, currentUserId());
     removeIndex.run(candidate.id);
   }
 }
@@ -678,7 +692,7 @@ export function repairInvalidSupersessions() {
        WHERE m.user_id = ? AND m.superseded_at IS NOT NULL
          AND s.user_id = ?`
     )
-    .all(USER_ID, USER_ID);
+    .all(currentUserId(), currentUserId());
   let restored = 0;
   for (const row of rows) {
     let ownFacets;
@@ -702,7 +716,7 @@ export function repairInvalidSupersessions() {
       `UPDATE memory_items
        SET superseded_at = NULL, superseded_by = NULL, updated_at = ?
        WHERE id = ? AND user_id = ?`
-    ).run(now(), row.id, USER_ID);
+    ).run(now(), row.id, currentUserId());
     indexMemory(row);
     restored += 1;
   }
@@ -718,7 +732,7 @@ export function listMemories(limit = 100) {
        ORDER BY importance DESC, updated_at DESC
        LIMIT ?`
     )
-    .all(USER_ID, limit)
+    .all(currentUserId(), limit)
     .map(mapMemory);
 }
 
@@ -734,7 +748,7 @@ export function createMemory({ type = "preference", content, importance = 0.5, s
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
-    USER_ID,
+    currentUserId(),
     safeType,
     safeContent,
     normalizeImportance(importance),
@@ -754,7 +768,7 @@ export function createMemory({ type = "preference", content, importance = 0.5, s
 export function updateMemory(id, { type, content, importance } = {}) {
   const existing = db
     .prepare("SELECT * FROM memory_items WHERE id = ? AND user_id = ?")
-    .get(id, USER_ID);
+    .get(id, currentUserId());
   if (!existing) return null;
   const safeType = normalizeMemoryType(type || existing.type, existing.type);
   const safeContent =
@@ -772,7 +786,7 @@ export function updateMemory(id, { type, content, importance } = {}) {
     JSON.stringify(memoryFacets(safeType, safeContent)),
     now(),
     id,
-    USER_ID
+    currentUserId()
   );
   const item = db
     .prepare("SELECT * FROM memory_items WHERE id = ?")
@@ -787,7 +801,7 @@ export function deleteMemory(id) {
   return (
     db.prepare("DELETE FROM memory_items WHERE id = ? AND user_id = ?").run(
       id,
-      USER_ID
+      currentUserId()
     ).changes > 0
   );
 }
@@ -803,7 +817,7 @@ export function searchMemories(query, limit = 5) {
          ORDER BY importance DESC, updated_at DESC
          LIMIT ?`
       )
-      .all(USER_ID, limit)
+      .all(currentUserId(), limit)
       .map(mapMemory);
   }
   const baseTokens = text
@@ -831,7 +845,7 @@ export function searchMemories(query, limit = 5) {
            ORDER BY m.importance DESC, score ASC
            LIMIT ?`
         )
-        .all(match, USER_ID, limit);
+        .all(match, currentUserId(), limit);
     } catch {
       rows = [];
     }
@@ -851,14 +865,14 @@ export function searchMemories(query, limit = 5) {
          ORDER BY importance DESC, updated_at DESC
          LIMIT ?`
       )
-      .all(USER_ID, ...params, limit);
+      .all(currentUserId(), ...params, limit);
   }
   if (rows.length) {
     const stamp = now();
     const markUsed = db.prepare(
       "UPDATE memory_items SET last_used_at = ? WHERE id = ? AND user_id = ?"
     );
-    for (const row of rows) markUsed.run(stamp, row.id, USER_ID);
+    for (const row of rows) markUsed.run(stamp, row.id, currentUserId());
   }
   return rows.map(mapMemory);
 }
@@ -881,7 +895,7 @@ export function createAgentRun({
   ).run(
     id,
     sessionId,
-    USER_ID,
+    currentUserId(),
     question,
     modelLabel || null,
     JSON.stringify(model || {}),
@@ -895,7 +909,7 @@ export function createAgentRun({
 export function getAgentRun(runId) {
   const row = db
     .prepare("SELECT * FROM agent_runs WHERE id = ? AND user_id = ?")
-    .get(runId, USER_ID);
+    .get(runId, currentUserId());
   if (!row) return null;
   return {
     id: row.id,
@@ -923,7 +937,7 @@ export function failInterruptedRuns(message = "服务重启后运行已中断") 
        WHERE user_id = ?
          AND status NOT IN ('completed', 'failed', 'cancelled')`
     )
-    .run(message, now(), USER_ID).changes;
+    .run(message, now(), currentUserId()).changes;
 }
 
 export function pruneAgentAudit({ days = 90 } = {}) {
@@ -940,13 +954,13 @@ export function pruneAgentAudit({ days = 90 } = {}) {
          SELECT id FROM agent_runs WHERE user_id = ? AND started_at < ?
        )`
     )
-    .run(USER_ID, cutoff).changes;
+    .run(currentUserId(), cutoff).changes;
   const runs = db
     .prepare(
       `DELETE FROM agent_runs
        WHERE user_id = ? AND started_at < ?`
     )
-    .run(USER_ID, cutoff).changes;
+    .run(currentUserId(), cutoff).changes;
   return { days: effectiveDays, cutoff, runs, steps };
 }
 
@@ -967,7 +981,7 @@ export function updateAgentRun(runId, changes = {}) {
     changes.error === undefined ? current.error : changes.error,
     changes.endedAt === undefined ? current.endedAt : changes.endedAt,
     runId,
-    USER_ID
+    currentUserId()
   );
   return getAgentRun(runId);
 }
@@ -1079,7 +1093,7 @@ export function createConfirmation({
     ) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     token,
-    USER_ID,
+    currentUserId(),
     runId || null,
     toolName,
     JSON.stringify(payload),
@@ -1096,7 +1110,7 @@ export function consumeConfirmation(token, toolName) {
        FROM confirmation_tokens
        WHERE token = ? AND user_id = ? AND tool_name = ?`
     )
-    .get(token, USER_ID, toolName);
+    .get(token, currentUserId(), toolName);
   if (!row || row.used_at) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
   db.prepare("UPDATE confirmation_tokens SET used_at = ? WHERE token = ?").run(
@@ -1131,8 +1145,8 @@ export function saveTrainingSessions({
          AND status = 'planned'`
     );
     for (const item of sessions) {
-      if (preserved.get(USER_ID, item.date)) continue;
-      clearPlanned.run(USER_ID, item.date);
+      if (preserved.get(currentUserId(), item.date)) continue;
+      clearPlanned.run(currentUserId(), item.date);
       const id = item.id || randomUUID();
       db.prepare(
         `INSERT INTO training_sessions (
@@ -1147,7 +1161,7 @@ export function saveTrainingSessions({
           updated_at = excluded.updated_at`
       ).run(
         id,
-        USER_ID,
+        currentUserId(),
         item.date,
         JSON.stringify(item.workout || item),
         item.status || "planned",
@@ -1174,7 +1188,7 @@ export function listTrainingSessions({ start, end } = {}) {
            WHERE user_id = ? AND date >= ? AND date <= ?
            ORDER BY date ASC`
         )
-        .all(USER_ID, start, end)
+        .all(currentUserId(), start, end)
     : db
         .prepare(
           `SELECT *
@@ -1182,7 +1196,7 @@ export function listTrainingSessions({ start, end } = {}) {
            WHERE user_id = ?
            ORDER BY date ASC`
         )
-        .all(USER_ID);
+        .all(currentUserId());
   return rows.map((row) => ({
     id: row.id,
     date: row.date,
@@ -1218,7 +1232,7 @@ export function checkInTrainingSession(id, { status = "completed", rpe = null, n
       safeStatus,
       timestamp,
       id,
-      USER_ID
+      currentUserId()
     ).changes;
   return changes > 0;
 }
@@ -1232,7 +1246,7 @@ export function createJob({
   if (idempotencyKey) {
     const existing = db
       .prepare("SELECT * FROM jobs WHERE user_id = ? AND idempotency_key = ?")
-      .get(USER_ID, idempotencyKey);
+      .get(currentUserId(), idempotencyKey);
     if (existing) return mapJob(existing);
   }
   const timestamp = now();
@@ -1243,7 +1257,7 @@ export function createJob({
     ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)`
   ).run(
     id,
-    USER_ID,
+    currentUserId(),
     type,
     idempotencyKey,
     JSON.stringify(payload),
@@ -1256,7 +1270,7 @@ export function createJob({
 export function getJob(id) {
   const row = db
     .prepare("SELECT * FROM jobs WHERE id = ? AND user_id = ?")
-    .get(id, USER_ID);
+    .get(id, currentUserId());
   return row ? mapJob(row) : null;
 }
 
@@ -1295,7 +1309,7 @@ export function updateJob(id, changes = {}) {
     changes.endedAt === undefined ? current.endedAt : changes.endedAt,
     timestamp,
     id,
-    USER_ID
+    currentUserId()
   );
   return getJob(id);
 }
@@ -1309,6 +1323,6 @@ export function listJobs(limit = 30) {
        ORDER BY created_at DESC
        LIMIT ?`
     )
-    .all(USER_ID, limit)
+    .all(currentUserId(), limit)
     .map(mapJob);
 }

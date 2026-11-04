@@ -1,10 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { buildDemoActivities } from "./seed.js";
 
-export const USER_ID = "local-runner";
+export const DEFAULT_USER_ID = "local-runner";
+const userContext = new AsyncLocalStorage();
+
+export function currentUserId() {
+  return userContext.getStore()?.userId || DEFAULT_USER_ID;
+}
+
+export function runAsUser(userId, callback) {
+  return userContext.run({ userId: String(userId) }, callback);
+}
+
 const dataDir = path.join(process.cwd(), "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -145,7 +156,7 @@ export function saveActivities(
       const distanceM = Math.round(activity.distanceM);
       const duplicate = Number.isFinite(startedMs)
         ? findCrossSourceDuplicate.get(
-            USER_ID,
+            currentUserId(),
             provider,
             new Date(startedMs - CROSS_SOURCE_TIME_TOLERANCE_MS).toISOString(),
             new Date(startedMs + CROSS_SOURCE_TIME_TOLERANCE_MS).toISOString(),
@@ -163,7 +174,7 @@ export function saveActivities(
 
       const result = insertActivity.run(
         randomUUID(),
-        USER_ID,
+        currentUserId(),
         provider,
         activity.externalId,
         importId,
@@ -198,7 +209,7 @@ export function saveActivities(
             activity.trainingLoad ?? null,
             activity.route ? JSON.stringify(activity.route) : null,
             JSON.stringify(activity.raw || {}),
-            USER_ID,
+            currentUserId(),
             provider,
             activity.externalId
           );
@@ -255,21 +266,21 @@ export function listActivities({ limit = 100 } = {}) {
        ORDER BY started_at DESC
        LIMIT ?`
     )
-    .all(USER_ID, limit)
+    .all(currentUserId(), limit)
     .map(mapActivityRow);
 }
 
 export function getActivity(id) {
   const row = db
     .prepare(`${activitySelect} WHERE user_id = ? AND id = ?`)
-    .get(USER_ID, String(id || ""));
+    .get(currentUserId(), String(id || ""));
   return row ? mapActivityRow(row) : null;
 }
 
 export function renameActivity(id, title) {
   const row = db
     .prepare("SELECT raw_json AS rawJson FROM activities WHERE user_id = ? AND id = ?")
-    .get(USER_ID, String(id || ""));
+    .get(currentUserId(), String(id || ""));
   if (!row) return null;
   let raw = {};
   try {
@@ -280,7 +291,7 @@ export function renameActivity(id, title) {
   raw.title = String(title || "").trim();
   db.prepare(
     "UPDATE activities SET raw_json = ? WHERE user_id = ? AND id = ?"
-  ).run(JSON.stringify(raw), USER_ID, String(id));
+  ).run(JSON.stringify(raw), currentUserId(), String(id));
   return getActivity(id);
 }
 
@@ -289,10 +300,10 @@ export function deleteActivity(id) {
     .prepare(
       "SELECT import_id AS importId FROM activities WHERE user_id = ? AND id = ?"
     )
-    .get(USER_ID, String(id || ""));
+    .get(currentUserId(), String(id || ""));
   if (!row) return null;
   db.prepare("DELETE FROM activities WHERE user_id = ? AND id = ?").run(
-    USER_ID,
+    currentUserId(),
     String(id)
   );
   if (row.importId) {
@@ -300,10 +311,10 @@ export function deleteActivity(id) {
       .prepare(
         "SELECT COUNT(*) AS count FROM activities WHERE user_id = ? AND import_id = ?"
       )
-      .get(USER_ID, row.importId).count;
+      .get(currentUserId(), row.importId).count;
     db.prepare("UPDATE imports SET imported_count = ? WHERE user_id = ? AND id = ?").run(
       remaining,
-      USER_ID,
+      currentUserId(),
       row.importId
     );
   }
@@ -313,13 +324,13 @@ export function deleteActivity(id) {
 export function activityCount() {
   return db
     .prepare("SELECT COUNT(*) AS count FROM activities WHERE user_id = ?")
-    .get(USER_ID).count;
+    .get(currentUserId()).count;
 }
 
 export function removeDemoActivities() {
   return db
     .prepare("DELETE FROM activities WHERE user_id = ? AND provider = 'demo'")
-    .run(USER_ID).changes;
+    .run(currentUserId()).changes;
 }
 
 export function createImport({ filename, format, fileSize, checksum }) {
@@ -328,7 +339,7 @@ export function createImport({ filename, format, fileSize, checksum }) {
     `INSERT INTO imports (
       id, user_id, filename, format, file_size, checksum, status, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, 'processing', ?)`
-  ).run(id, USER_ID, filename, format, fileSize, checksum, new Date().toISOString());
+  ).run(id, currentUserId(), filename, format, fileSize, checksum, new Date().toISOString());
   return id;
 }
 
@@ -346,7 +357,7 @@ export function finishImport(id, { status, imported, skipped, failed, error = nu
     new Date().toISOString(),
     error,
     id,
-    USER_ID
+    currentUserId()
   );
 }
 
@@ -363,19 +374,19 @@ export function listImports(limit = 20) {
       ORDER BY created_at DESC
       LIMIT ?`
     )
-    .all(USER_ID, limit);
+    .all(currentUserId(), limit);
 }
 
 export function deleteImport(id) {
   const imported = db
     .prepare("SELECT id FROM imports WHERE id = ? AND user_id = ?")
-    .get(id, USER_ID);
+    .get(id, currentUserId());
   if (!imported) return null;
 
   const deletedActivities = db
     .prepare("DELETE FROM activities WHERE import_id = ? AND user_id = ?")
-    .run(id, USER_ID).changes;
-  db.prepare("DELETE FROM imports WHERE id = ? AND user_id = ?").run(id, USER_ID);
+    .run(id, currentUserId()).changes;
+  db.prepare("DELETE FROM imports WHERE id = ? AND user_id = ?").run(id, currentUserId());
   return { deletedActivities };
 }
 
@@ -392,7 +403,7 @@ export function getCorosConnection() {
        WHERE user_id = ?
        LIMIT 1`
     )
-    .get(USER_ID);
+    .get(currentUserId());
 }
 
 export function saveCorosClient({ region, issuer, mcpUrl, clientId, redirectUri }) {
@@ -423,7 +434,7 @@ export function saveCorosClient({ region, issuer, mcpUrl, clientId, redirectUri 
       endpointChanged ? 1 : 0,
       endpointChanged ? 1 : 0,
       now,
-      USER_ID
+      currentUserId()
     );
     return;
   }
@@ -434,7 +445,7 @@ export function saveCorosClient({ region, issuer, mcpUrl, clientId, redirectUri 
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     randomUUID(),
-    USER_ID,
+    currentUserId(),
     region,
     issuer,
     mcpUrl,
@@ -464,31 +475,31 @@ export function saveCorosTokens({
     scope,
     expiresAt,
     new Date().toISOString(),
-    USER_ID
+    currentUserId()
   );
 }
 
 export function updateCorosSyncTime() {
   db.prepare(
     "UPDATE coros_connection SET last_sync_at = ?, updated_at = ? WHERE user_id = ?"
-  ).run(new Date().toISOString(), new Date().toISOString(), USER_ID);
+  ).run(new Date().toISOString(), new Date().toISOString(), currentUserId());
 }
 
 export function clearCorosConnection() {
-  return db.prepare("DELETE FROM coros_connection WHERE user_id = ?").run(USER_ID).changes;
+  return db.prepare("DELETE FROM coros_connection WHERE user_id = ?").run(currentUserId()).changes;
 }
 
 export function corosActivityCount() {
   return db
     .prepare("SELECT COUNT(*) AS count FROM activities WHERE user_id = ? AND provider = 'coros'")
-    .get(USER_ID).count;
+    .get(currentUserId()).count;
 }
 
 export function resetDemoData() {
   db.exec("BEGIN");
   try {
-    db.prepare("DELETE FROM activities WHERE user_id = ?").run(USER_ID);
-    db.prepare("DELETE FROM imports WHERE user_id = ?").run(USER_ID);
+    db.prepare("DELETE FROM activities WHERE user_id = ?").run(currentUserId());
+    db.prepare("DELETE FROM imports WHERE user_id = ?").run(currentUserId());
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -497,6 +508,9 @@ export function resetDemoData() {
   return saveActivities(buildDemoActivities());
 }
 
-if (activityCount() === 0 && process.env.SEED_DEMO !== "false") {
+export function ensureUserInitialized() {
+  if (activityCount() > 0 || process.env.SEED_DEMO === "false") return;
   saveActivities(buildDemoActivities());
 }
+
+ensureUserInitialized();

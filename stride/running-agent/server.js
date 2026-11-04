@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import multer from "multer";
-import { USER_ID, activityCount } from "./src/db.js";
+import { DEFAULT_USER_ID, activityCount } from "./src/db.js";
 import { corosStatus } from "./src/coros.js";
 import { registerAgentRoutes } from "./src/agent-api.js";
 import { failInterruptedRuns, pruneAgentAudit } from "./src/agent-store.js";
@@ -15,6 +15,7 @@ import {
 import { registerDataRoutes } from "./src/api/data-routes.js";
 import { registerCorosRoutes } from "./src/api/coros-routes.js";
 import { registerModelRoutes } from "./src/api/model-routes.js";
+import { workspaceMiddleware } from "./src/workspace.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +30,7 @@ const upload = multer({
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
+app.use(workspaceMiddleware);
 app.use((request, response, next) => {
   if (request.path.startsWith("/api/")) {
     response.setHeader("Cache-Control", "no-store");
@@ -141,4 +143,4 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-export { app, USER_ID };
+export { app, DEFAULT_USER_ID };

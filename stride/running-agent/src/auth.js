@@ -118,7 +118,7 @@ export function registerAuthRoutes(app, { httpError }) {
       [
         `stride_auth=${encodeURIComponent(token)}`,
         "HttpOnly",
-        "SameSite=Strict",
+        "SameSite=Lax",
         "Path=/",
         `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
         ...(secure ? ["Secure"] : [])
@@ -132,7 +132,7 @@ export function registerAuthRoutes(app, { httpError }) {
     if (token) sessions.delete(token);
     response.setHeader(
       "Set-Cookie",
-      "stride_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
+      "stride_auth=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
     );
     response.json({ authenticated: false });
   });

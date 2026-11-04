@@ -37,6 +37,7 @@ test("optional password protects API routes and accepts valid login", async () =
       body: JSON.stringify({ password: "test-password" })
     });
     assert.equal(login.status, 200);
+    assert.match(login.headers.get("set-cookie"), /SameSite=Lax/);
     const cookie = login.headers.get("set-cookie").split(";")[0];
     const allowed = await fetch(`${baseUrl}/api/protected`, {
       headers: { cookie }

@@ -143,6 +143,8 @@ started_at,distance_km,duration_sec,avg_pace_sec_per_km,avg_heart_rate,max_heart
 PUBLIC_BASE_URL=https://your-domain.example
 ```
 
+在 Render 上也可以直接使用 Render 自动提供的服务地址；部署到自定义域名时，应将 `PUBLIC_BASE_URL` 设置为最终对外访问的 HTTPS 地址。
+
 令牌加密使用 `data/master.key` 或环境变量：
 
 ```bash

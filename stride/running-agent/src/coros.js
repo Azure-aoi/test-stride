@@ -145,10 +145,17 @@ async function discoverIssuer(region = "global") {
 }
 
 function publicBaseUrl(request) {
-  if (process.env.PUBLIC_BASE_URL) {
-    return String(process.env.PUBLIC_BASE_URL).replace(/\/$/, "");
+  const configured = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL;
+  if (configured) {
+    return String(configured).replace(/\/$/, "");
   }
-  return `${request.protocol}://${request.get("host")}`;
+  const firstValue = (value) => String(value || "").split(",")[0].trim();
+  const protocol =
+    firstValue(request.get("x-forwarded-proto")) || request.protocol;
+  const host =
+    firstValue(request.get("x-forwarded-host")) ||
+    firstValue(request.get("host"));
+  return `${protocol}://${host}`;
 }
 
 async function registerClient(issuer, redirectUri) {

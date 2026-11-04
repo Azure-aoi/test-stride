@@ -1,0 +1,5 @@
+interface:
+  display_name: "精英马拉松教练"
+  short_description: "基于吴向东和萨维公开训练习惯制定安全的跑步计划"
+  brand_color: "#C9F84C"
+  default_prompt: "使用 $elite-marathon-coach 根据我的近期跑步数据制定未来 7 天训练计划。"
